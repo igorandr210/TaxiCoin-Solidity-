@@ -7,17 +7,17 @@ import "../node_modules/openzeppelin-solidity/contracts/ownership/Ownable.sol";
 
 contract Escrow is Ownable,StandardToken {
     
-string public name = 'TaxiCoin';
-string public symbol = 'TXC';
-uint8 public decimals = 0;
-uint public INITIAL_SUPPLY = 120000;
-    enum PaymentStatus { Pending, Completed, Refunded,GetByExecutor }
-    event PaymentCreation(uint indexed orderId, address indexed customer, uint value);
-    event PaymentCompletion(uint indexed orderId, address indexed customer, uint value, PaymentStatus status);
+    string public name = 'TaxiCoin';
+    string public symbol = 'TXC';
+    uint8 public decimals = 0;
+    uint public INITIAL_SUPPLY = 120000;
+    enum PaymentStatus { Pending, Completed, Refunded,GetByDriver }
+    uint Comission=0;
+
 
     struct Payment {
-        address customer;
-        address executor; 
+        address Customer;
+        address Driver; 
         uint value;
         PaymentStatus status;
         bool refundApproved;
@@ -29,41 +29,90 @@ uint public INITIAL_SUPPLY = 120000;
         balances[msg.sender] = INITIAL_SUPPLY;
     }
 
-    function createPayment(uint _orderId, uint _value) external {
-        require(!payments[_orderId].isValue);
-        bool result=transfer(owner,_value);
-        require(result);
-        payments[_orderId] = Payment(msg.sender,address(0), _value, PaymentStatus.Pending, false,true);
-        emit PaymentCreation(_orderId, msg.sender, _value);
+    function setComission(uint _newComission) external onlyOwner returns(uint)
+    {
+        require(_newComission<100);
+        require(_newComission>0);
+        Comission=_newComission;
+        return Comission;
     }
-    function getOrder(uint _orderId) external {
+
+    function createPayment(uint _orderId, uint _value) external returns(uint) {
+        require(!payments[_orderId].isValue);
+        require(balances[msg.sender]>=_value);
+        balances[msg.sender]-=_value;
+        balances[owner]+=_value;
+        payments[_orderId] = Payment(msg.sender,address(0), _value, PaymentStatus.Pending, false,true);
+        return uint(PaymentStatus.Pending);
+    }
+    function getOrder(uint _orderId) external returns(uint) {
         Payment storage payment = payments[_orderId];
-        require(payment.executor==address(0));
+        require(payment.Driver==address(0));
         require(payment.status==PaymentStatus.Pending);
-        payment.status=PaymentStatus.GetByExecutor;
-        payment.executor=msg.sender;
+        payment.status=PaymentStatus.GetByDriver;
+        payment.Driver=msg.sender;
+        return uint(payment.status);
     }
  
-    function completeOrder(uint _orderId) external{
+    function completeOrder(uint _orderId) external returns(uint){
         Payment storage payment = payments[_orderId];
-        require(payment.customer==msg.sender);
-        require(payment.status==PaymentStatus.GetByExecutor);
-        transfer(payment.executor,payment.value);
+        require(payment.Customer==msg.sender);
+        require(payment.status==PaymentStatus.GetByDriver);
+        require(balances[owner]>=payment.value);
+        uint comissionValue=(payment.value*Comission)/100;
+        balances[owner]-=(payment.value-comissionValue);
+        balances[payment.Driver]+=(payment.value-comissionValue);
         payment.status=PaymentStatus.Completed;
+        return uint(payment.status);
     }
 
-    function refund(uint _orderId) external {
+    function refund(uint _orderId) external returns(uint){
         Payment storage payment = payments[_orderId];
-        require(payment.status==PaymentStatus.Pending||payment.status==PaymentStatus.GetByExecutor);
-        require(payment.customer==msg.sender);
-        payment.status=PaymentStatus.Refunded;
+        require(payment.status==PaymentStatus.Pending||payment.status==PaymentStatus.GetByDriver);
+		require(payment.Customer==msg.sender);
+		if(payment.status==PaymentStatus.Pending)
+		{
+            require(balances[owner]>=payment.value);
+            balances[owner]-=payment.value;
+            balances[payment.Customer]+=payment.value;
+			payment.refundApproved = true;
+			payment.status=PaymentStatus.Completed;
+			return uint(payment.status);
+		}
+		else
+		{
+			payment.status=PaymentStatus.Refunded;
+			return uint(payment.status);
+		}
     }
-
-    function approveRefund(uint _orderId) external onlyOwner{
+	
+	function disApproveRefund(uint _orderId) external onlyOwner returns(uint){
         Payment storage payment = payments[_orderId];
         require(payment.refundApproved==false);
-        bool res=transfer(payment.customer,payment.value);
-        require(res);
-        payment.refundApproved = true;
+		require(payment.status==PaymentStatus.Refunded);
+        require(balances[owner]>=payment.value);
+        balances[owner]-=payment.value;
+        balances[payment.Driver]+=payment.value;
+        payment.status=PaymentStatus.Completed;
+        return uint(payment.status);
     }
+	
+    function approveRefund(uint _orderId) external onlyOwner returns(uint){
+        Payment storage payment = payments[_orderId];
+        require(payment.refundApproved==false);
+		require(payment.status==PaymentStatus.Refunded);
+        require(balances[owner]>=payment.value);
+        balances[owner]-=payment.value;
+        balances[payment.Customer]+=payment.value;
+        payment.refundApproved = true;
+        payment.status=PaymentStatus.Completed;
+        return uint(payment.status);
+    }
+
+    function deposit() external payable returns(uint) {
+        require(msg.value>0);
+        totalSupply_+=msg.value;
+        balances[msg.sender] += msg.value;
+		return balances[msg.sender];
+    } 
 }
